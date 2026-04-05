@@ -81,6 +81,10 @@ bone-detection/
 ├── train.py           # Training & validation loops
 ├── evaluate.py        # Test-set evaluation & reports
 ├── predict.py         # Single-image / batch inference
+├── gradcam.py         # Grad-CAM heatmap visualisation
+├── app.py             # Streamlit radiology dashboard (UI)
+├── cassandra_db.py    # Apache Cassandra prediction logging
+├── hdfs_manager.py    # Simulated HDFS storage layer
 ├── utils.py           # Metrics, checkpointing, plots
 ├── main.py            # Pipeline entry point
 ├── requirements.txt   # Python dependencies
@@ -101,8 +105,76 @@ bone-detection/
 │
 ├── checkpoints/       # Saved model weights (.pth)
 ├── results/           # Metrics, plots, history JSON
+├── hdfs/              # Simulated HDFS block storage
+│   ├── raw_images/        ← original uploads
+│   ├── processed_images/  ← resized 224×224 inputs
+│   ├── predictions/       ← JSON records per inference
+│   └── logs/              ← system-level event logs
 └── logs/              # Training logs
 ```
+
+---
+
+## Web Dashboard (Streamlit UI)
+
+A professional medical-grade radiology workstation built with **Streamlit**.
+
+### Features
+
+- Upload X-ray images and get real-time predictions with confidence scores
+- **Grad-CAM heatmap overlay** — highlights the regions that drove the model's decision
+- Dark-themed radiology UI with animated scan indicators
+- Prediction history panel per session
+- Big Data integration panel (HDFS status + Cassandra log viewer)
+
+### Launch
+
+```bash
+pip install streamlit plotly
+streamlit run app.py
+```
+
+The dashboard opens at `http://localhost:8501`.
+
+---
+
+## Grad-CAM Visualisation
+
+`gradcam.py` generates saliency heatmaps by back-propagating gradients through the final convolutional layer of ResNet-50.
+
+Improvements over a naive implementation:
+
+- **LANCZOS4 interpolation** for smooth 7×7 → 224×224 upscaling
+- **Gaussian blur** to remove blocky artefacts
+- **Percentile thresholding** — only top activations are highlighted
+- **JET colormap** for maximum contrast on greyscale X-ray images
+- Weighted blend that preserves the original image detail
+
+---
+
+## Big Data Integration
+
+### Apache Cassandra (Prediction Logging)
+
+`cassandra_db.py` logs every inference to a Cassandra keyspace (`bone_cancer_db`, table `prediction_logs`). The module degrades gracefully — if Cassandra is not running the rest of the app is unaffected.
+
+**Quick-start with Docker:**
+
+```bash
+docker run -d --name cassandra -p 9042:9042 cassandra:4.1
+pip install cassandra-driver
+```
+
+### Simulated HDFS (`hdfs_manager.py`)
+
+Mimics Hadoop Distributed File System block storage using a local folder structure for academic Big Data integration:
+
+| HDFS path | Contents |
+|---|---|
+| `hdfs/raw_images/` | Original uploads as received |
+| `hdfs/processed_images/` | Resized 224×224 model inputs |
+| `hdfs/predictions/` | JSON prediction record per inference |
+| `hdfs/logs/` | System-level event logs |
 
 ---
 
@@ -125,6 +197,12 @@ pip install -r requirements.txt
 ```
 
 For GPU support, install the CUDA-enabled PyTorch build from [pytorch.org](https://pytorch.org/get-started/locally/).
+
+**Additional dependencies for the dashboard and Big Data layer:**
+
+```bash
+pip install streamlit plotly opencv-python cassandra-driver
+```
 
 ---
 

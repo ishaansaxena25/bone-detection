@@ -30,18 +30,24 @@ def get_transforms(split: str) -> transforms.Compose:
 
     if split == "train" and config.AUGMENT_TRAIN:
         return transforms.Compose([
-            transforms.Resize(config.IMAGE_SIZE),
+            transforms.Resize((256, 256)),                              # slightly larger then crop
+            transforms.RandomCrop(config.IMAGE_SIZE),                   # random crop = free augmentation
             transforms.RandomHorizontalFlip(p=config.AUGMENT_PROB),
             transforms.RandomVerticalFlip(p=config.AUGMENT_PROB * 0.3),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-            transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+            transforms.RandomRotation(degrees=20),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3,
+                                   saturation=0.15, hue=0.05),
+            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1),
+                                    scale=(0.9, 1.1)),
+            transforms.RandomGrayscale(p=0.1),                          # X-rays are greyscale anyway
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std),
+            transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),         # hides small patches → robustness
         ])
 
     return transforms.Compose([
-        transforms.Resize(config.IMAGE_SIZE),
+        transforms.Resize((256, 256)),
+        transforms.CenterCrop(config.IMAGE_SIZE),   # deterministic centre crop at test time
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
     ])

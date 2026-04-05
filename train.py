@@ -20,7 +20,8 @@ from utils   import AverageMeter, compute_metrics, save_checkpoint, EarlyStoppin
 
 # ─── Single epoch ─────────────────────────────────────────────────────────────
 
-def train_one_epoch(model, loader, criterion, optimizer, device, epoch):
+def train_one_epoch(model, loader, criterion, optimizer, device, epoch,
+                    scheduler=None, scheduler_per_batch=False):
     model.train()
     loss_meter = AverageMeter()
     correct, total = 0, 0
@@ -34,6 +35,10 @@ def train_one_epoch(model, loader, criterion, optimizer, device, epoch):
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        # OneCycleLR must step every batch, not every epoch
+        if scheduler is not None and scheduler_per_batch:
+            scheduler.step()
 
         loss_meter.update(loss.item(), images.size(0))
         preds    = logits.argmax(dim=1)
@@ -97,6 +102,7 @@ def train(
     """
     hp = hyperparams or {
         "lr":           config.DEFAULT_LR,
+        "backbone_lr":  config.DEFAULT_BACKBONE_LR,
         "dropout":      config.DEFAULT_DROPOUT,
         "weight_decay": config.DEFAULT_WEIGHT_DECAY,
         "momentum":     config.DEFAULT_MOMENTUM,
@@ -111,9 +117,12 @@ def train(
     train_loader, train_ds = get_dataloader("train")
     val_loader,   _        = get_dataloader("val")
 
-    # Class-weighted loss to handle imbalance
+    # Class-weighted loss + label smoothing to handle imbalance & overconfidence
     class_weights = train_ds.class_weights().to(device)
-    criterion     = nn.CrossEntropyLoss(weight=class_weights)
+    criterion     = nn.CrossEntropyLoss(
+        weight           = class_weights,
+        label_smoothing  = config.LABEL_SMOOTHING,
+    )
 
     # Model
     model = build_model(
@@ -122,15 +131,30 @@ def train(
         device   = device,
     )
 
-    # Optimiser
-    optimizer = optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr           = hp["lr"],
-        momentum     = hp["momentum"],
+    # Differential learning rates:
+    #   backbone (pretrained) → 10× lower LR to avoid destroying ImageNet features
+    #   classification head  → full LR for fast convergence on the new task
+    backbone_params = list(model.backbone.parameters())
+    head_params     = list(model.classifier.parameters())
+    optimizer = optim.AdamW(
+        [
+            {"params": backbone_params, "lr": hp.get("backbone_lr", hp["lr"] * 0.1)},
+            {"params": head_params,     "lr": hp["lr"]},
+        ],
         weight_decay = hp["weight_decay"],
-        nesterov     = True,
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
+
+    # OneCycleLR: ramps up then anneals — best single-cycle policy for fine-tuning
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr        = [hp.get("backbone_lr", hp["lr"] * 0.1), hp["lr"]],
+        steps_per_epoch = len(train_loader),
+        epochs        = num_epochs,
+        pct_start     = 0.3,        # 30% of training spent warming up
+        anneal_strategy = "cos",
+        div_factor    = 10.0,
+        final_div_factor = 1e3,
+    )
 
     early_stop      = EarlyStopping(patience=config.EARLY_STOP_PATIENCE)
     best_val_acc    = 0.0
@@ -140,10 +164,11 @@ def train(
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
         train_metrics = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, epoch
+            model, train_loader, criterion, optimizer, device, epoch,
+            scheduler=scheduler, scheduler_per_batch=True   # OneCycleLR steps per batch
         )
         val_metrics = validate(model, val_loader, criterion, device)
-        scheduler.step()
+        # scheduler already stepped inside the batch loop — do NOT call here
 
         elapsed = time.time() - t0
         print(

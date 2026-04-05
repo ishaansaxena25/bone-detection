@@ -11,13 +11,16 @@ Usage
 import os
 import argparse
 from PIL import Image
+from datetime import datetime
 
 import torch
 import torch.nn.functional as F
 
 import config
-from model   import load_checkpoint
-from dataset import get_transforms
+from model        import load_checkpoint
+from dataset      import get_transforms
+import hdfs_manager
+import cassandra_db
 
 
 # ─── Single-image prediction ──────────────────────────────────────────────────
@@ -39,14 +42,27 @@ def predict_image(
     probs  = F.softmax(logits, dim=1).squeeze(0)
     pred   = probs.argmax().item()
 
+    image_name   = os.path.basename(image_path)
+    prediction   = config.CLASS_NAMES[pred]
+    confidence   = round(probs[pred].item() * 100, 2)
+    probs_dict   = {cls: round(probs[i].item() * 100, 2) for i, cls in enumerate(config.CLASS_NAMES)}
+    ts           = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ── Big Data: save to HDFS + Cassandra ───────────────────────────────────
+    try:
+        with open(image_path, "rb") as fh:
+            hdfs_manager.save_raw_image(fh.read(), image_name)
+        hdfs_manager.save_processed_image(img, image_name)
+        hdfs_manager.save_prediction_json(image_name, prediction, confidence, probs_dict, ts)
+        cassandra_db.insert_prediction(image_name, prediction, confidence, probs_dict, ts)
+    except Exception:
+        pass  # Big Data layer errors never block inference
+
     return {
-        "image":      os.path.basename(image_path),
-        "prediction": config.CLASS_NAMES[pred],
-        "confidence": round(probs[pred].item() * 100, 2),
-        "probabilities": {
-            cls: round(probs[i].item() * 100, 2)
-            for i, cls in enumerate(config.CLASS_NAMES)
-        },
+        "image":         image_name,
+        "prediction":    prediction,
+        "confidence":    confidence,
+        "probabilities": probs_dict,
     }
 
 

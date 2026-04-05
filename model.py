@@ -129,13 +129,24 @@ def build_model(
 
 
 def load_checkpoint(path: str, device: str = "cpu") -> BoneCancerNet:
-    """Load a saved model checkpoint."""
-    ckpt  = torch.load(path, map_location=device)
+    """Load a saved model checkpoint.
+
+    Automatically detects the number of output classes from the saved weights
+    so the model always matches the checkpoint, regardless of what config says.
+    """
+    ckpt = torch.load(path, map_location=device)
+    sd   = ckpt["model_state"]
+
+    # Detect num_classes from the final classifier layer weight shape
+    last_weight_key = [k for k in sd if "classifier" in k and k.endswith(".weight")][-1]
+    num_classes_ckpt = sd[last_weight_key].shape[0]
+
     model = BoneCancerNet(
-        fc_units = ckpt.get("fc_units", config.DEFAULT_FC_UNITS),
-        dropout  = ckpt.get("dropout",  config.DEFAULT_DROPOUT),
+        fc_units    = ckpt.get("fc_units",    config.DEFAULT_FC_UNITS),
+        dropout     = ckpt.get("dropout",     config.DEFAULT_DROPOUT),
+        num_classes = num_classes_ckpt,        # use checkpoint's class count, not config
     )
-    model.load_state_dict(ckpt["model_state"])
+    model.load_state_dict(sd)
     model = model.to(device)
-    print(f"Loaded checkpoint: {path}")
+    print(f"Loaded checkpoint: {path}  ({num_classes_ckpt} classes)")
     return model
